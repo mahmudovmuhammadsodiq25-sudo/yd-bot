@@ -130,7 +130,8 @@ async def pick_role(update, ctx):
     ctx.user_data["role"] = role
     prompt = "Qaysi fanni o'qitasiz?" if role == "teacher" else "Lavozimingiz nima?"
     label = "Fan o'qituvchisi" if role == "teacher" else "Maktab xodimi"
-    await q.edit_message_text(f"{'\ud83d\udcda' if role=='teacher' else '\ud83c\udfeb'} {label}: {ctx.user_data['name']}\n\n{prompt}")
+    role_icon = "📚" if role == "teacher" else "🏫"
+    await q.edit_message_text(f"{role_icon} {label}: {ctx.user_data['name']}\n\n{prompt}")
     return S_DETAIL
 
 async def get_detail(update, ctx):
@@ -159,7 +160,8 @@ async def _show_list(q, ctx, grade):
     for sid, info in ALL.items():
         if info["grade"] != grade: continue
         cnt += 1
-        lbl = f"{cnt}. {'\u2705' if sid in done else ''}{info['display']}"
+        check = "\u2705 " if sid in done else ""
+        lbl = f"{cnt}. {check}{info['display']}"
         row.append(InlineKeyboardButton(lbl, callback_data=f"s_{sid}"))
         if len(row)==2: rows.append(row); row = []
     if row: rows.append(row)
@@ -225,7 +227,8 @@ async def _save(msg, ctx):
     db[sid].append(fb); save_db(db)
     s = ALL[sid]
     rl = "Fan ustozi" if ctx.user_data["role"] == "teacher" else "Maktab xodimi"
-    atxt = (f"{'\ud83d\udcda' if ctx.user_data['role']=='teacher' else '\ud83c\udfeb'} YANGI FIKR\n"
+    fb_icon = "📚" if ctx.user_data["role"] == "teacher" else "🏫"
+    atxt = (f"{fb_icon} YANGI FIKR\n"
             f"O'quvchi: {s['name']} ({s['grade']})\nKim: {ctx.user_data['name']}\n{rl}: {ctx.user_data['detail']}\n"
             f"\u23f1 {ctx.user_data.get('vdur',0)} sek \u2022 {fb['ts']}")
     if fb["extra"]: atxt += f"\n\u270d\ufe0f {fb['extra']}"
