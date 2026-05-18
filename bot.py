@@ -1,4 +1,5 @@
 import os, json, logging
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, ConversationHandler,
@@ -6,6 +7,7 @@ from telegram.ext import (Application, CommandHandler, MessageHandler,
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BOT_TOKEN", "")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or "0")
 
 STUDENTS = {
     "9-sinf": [
@@ -45,17 +47,14 @@ def build_all():
     for g, ns in STUDENTS.items():
         for n in ns:
             i = get_ism(n); ism_cnt[i] = ism_cnt.get(i, 0) + 1
-    out = {}
-    idx = 1
+    out = {}; idx = 1
     for g, ns in STUDENTS.items():
         for n in ns:
-            ism = get_ism(n)
-            p = n.strip().split()
+            ism = get_ism(n); p = n.strip().split()
             if ism_cnt[ism] > 1:
                 fam = p[0] if get_ism(n) == p[-1] else p[-1]
                 disp = f"{fam} {ism[0]}."
-            else:
-                disp = ism
+            else: disp = ism
             out[str(idx)] = {"name": n, "grade": g, "display": disp}
             idx += 1
     return out
@@ -69,13 +68,48 @@ def load_db():
 def save_db(db):
     with open(DB,"w",encoding="utf-8") as f: json.dump(db,f,ensure_ascii=False,indent=2)
 
+def get_admin_id():
+    global ADMIN_ID
+    if ADMIN_ID: return ADMIN_ID
+    db = load_db()
+    aid = db.get("_admin_id", 0)
+    if aid: ADMIN_ID = aid
+    return ADMIN_ID
+
+async def notify_admin(ctx, text, voice_file_id=None, duration=0):
+    aid = get_admin_id()
+    if not aid: return
+    try:
+        await ctx.bot.send_message(aid, text)
+        if voice_file_id:
+            await ctx.bot.send_voice(aid, voice=voice_file_id, caption=f"({duration} sek)")
+    except Exception as e:
+        logging.error(f"Admin notify: {e}")
+
+def find_student_by_name(text):
+    """Ism yoki familiya bo'yicha o'quvchini topish"""
+    t = text.strip().lower()
+    matches = []
+    for sid, info in ALL.items():
+        parts = info["name"].lower().split()
+        if t in parts or t == info["name"].lower():
+            matches.append(sid)
+    if len(matches) == 1: return matches[0]
+    # Qisman mos
+    for sid, info in ALL.items():
+        if t in info["name"].lower():
+            matches.append(sid)
+    seen = list(dict.fromkeys(matches))
+    return seen[0] if len(seen) == 1 else (seen if seen else None)
+
 S_NAME,S_ROLE,S_DETAIL,S_GRADE,S_STU,S_VOICE,S_REVIEW,S_EXTRA,S_AFTER = range(9)
 
-# ── /start ────────────────────────────────────────────────────────────────
+# ═══════════ USTOZ /start ═══════════
 async def start(update, ctx):
     args = ctx.args or []
     if args and args[0].startswith("student_"):
-        return await show_parent_menu(update, ctx, args[0].replace("student_",""))
+        sid = args[0].replace("student_","")
+        return await show_parent_menu(update, ctx, sid)
     ctx.user_data.clear()
     await update.message.reply_text(
         "Yangi Davr Xususiy Maktabi\nUstoz Fikri Tizimi\n\n"
@@ -85,13 +119,10 @@ async def start(update, ctx):
 
 async def get_name(update, ctx):
     ctx.user_data["name"] = update.message.text.strip()
-    kb = [[
-        InlineKeyboardButton("📚 Fan o'qituvchisi", callback_data="r_teacher"),
-        InlineKeyboardButton("🏫 Maktab xodimi", callback_data="r_staff"),
-    ]]
+    kb = [[InlineKeyboardButton("📚 Fan o'qituvchisi", callback_data="r_teacher"),
+           InlineKeyboardButton("🏫 Maktab xodimi", callback_data="r_staff")]]
     await update.message.reply_text(
-        f"Rahmat {ctx.user_data['name']}!\n\n"
-        "Siz kim sifatida fikr bildirasiz?",
+        f"Rahmat {ctx.user_data['name']}!\nSiz kim sifatida fikr bildirasiz?",
         reply_markup=InlineKeyboardMarkup(kb))
     return S_ROLE
 
@@ -99,25 +130,18 @@ async def pick_role(update, ctx):
     q = update.callback_query; await q.answer()
     role = q.data.replace("r_","")
     ctx.user_data["role"] = role
-    if role == "teacher":
-        await q.edit_message_text(
-            f"📚 Fan o'qituvchisi: {ctx.user_data['name']}\n\n"
-            "Qaysi fanni o'qitasiz?\n"
-            "(Masalan: Matematika, Ingliz tili, Ona tili, IT, Fizika...)")
-    else:
-        await q.edit_message_text(
-            f"🏫 Maktab xodimi: {ctx.user_data['name']}\n\n"
-            "Lavozimingiz nima?\n"
-            "(Masalan: Direktor, Direktor o'rinbosari, Sinf rahbari, Psixolog...)")
+    prompt = "Qaysi fanni o'qitasiz?" if role == "teacher" else "Lavozimingiz nima?"
+    label = "Fan o'qituvchisi" if role == "teacher" else "Maktab xodimi"
+    await q.edit_message_text(f"{'📚' if role=='teacher' else '🏫'} {label}: {ctx.user_data['name']}\n\n{prompt}")
     return S_DETAIL
 
 async def get_detail(update, ctx):
     ctx.user_data["detail"] = update.message.text.strip()
-    kb = [[InlineKeyboardButton("9-sinf (18 ta)", callback_data="g_9-sinf"),
-           InlineKeyboardButton("10-sinf (20 ta)", callback_data="g_10-sinf")],
-          [InlineKeyboardButton("11-sinf (7 ta)", callback_data="g_11-sinf")]]
-    await update.message.reply_text("Qaysi sinf o'quvchisi haqida fikr bildirasiz?",
-                                     reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("9-sinf (18)", callback_data="g_9-sinf"),
+           InlineKeyboardButton("10-sinf (20)", callback_data="g_10-sinf")],
+          [InlineKeyboardButton("11-sinf (7)", callback_data="g_11-sinf")]]
+    await update.message.reply_text("Qaysi sinf haqida fikr bildirasiz?",
+                                    reply_markup=InlineKeyboardMarkup(kb))
     return S_GRADE
 
 async def pick_grade(update, ctx):
@@ -128,17 +152,21 @@ async def pick_grade(update, ctx):
 async def _show_list(q, ctx, grade):
     db = load_db()
     teacher = ctx.user_data["name"]
-    done = {sid for sid,fbs in db.items() for fb in fbs if fb.get("teacher")==teacher}
+    done = set()
+    for sid, fbs in db.items():
+        if sid.startswith("_") or not isinstance(fbs, list): continue
+        for fb in fbs:
+            if fb.get("teacher") == teacher: done.add(sid)
     rows, row, cnt = [], [], 0
     for sid, info in ALL.items():
         if info["grade"] != grade: continue
         cnt += 1
-        lbl = f"{cnt}. {'✅ ' if sid in done else ''}{info['display']}"
+        lbl = f"{cnt}. {'✅' if sid in done else ''}{info['display']}"
         row.append(InlineKeyboardButton(lbl, callback_data=f"s_{sid}"))
         if len(row)==2: rows.append(row); row = []
     if row: rows.append(row)
     rows.append([InlineKeyboardButton("🔙 Sinf tanlash", callback_data="back_grade")])
-    txt = f"{grade} o'quvchilari (tartib raqami bilan):\n(✅ — siz fikr bildirganlar)"
+    txt = f"{grade} o'quvchilari:\n(✅ — siz fikr bildirganlar)"
     try: await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(rows))
     except: await q.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(rows))
     return S_STU
@@ -154,11 +182,8 @@ async def pick_stu(update, ctx):
     sid = q.data.replace("s_",""); s = ALL[sid]
     ctx.user_data["sid"] = sid; ctx.user_data["sname"] = s["name"]
     await q.edit_message_text(
-        f"{s['name']} ({s['grade']})\n\n"
-        f"🎙 Ovozli xabar yuboring:\n"
-        f"1. Mikrofonni bosing va gapiring\n"
-        f"2. Tugatgach, ovoz eshitiladi\n"
-        f"3. Tasdiqlash yoki qayta yozish")
+        f"{s['name']} ({s['grade']})\n\n🎙 Ovozli xabar yuboring:\n"
+        f"Mikrofonni bosing va gapiring.")
     return S_VOICE
 
 async def recv_voice(update, ctx):
@@ -167,9 +192,8 @@ async def recv_voice(update, ctx):
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Tasdiqlash", callback_data="ok_voice"),
         InlineKeyboardButton("🔄 Qayta yozish", callback_data="redo_voice")]])
-    await update.message.reply_voice(
-        voice=update.message.voice.file_id,
-        caption=f"Ovoz xabaringiz ({update.message.voice.duration} sek)\nEshitib ko'ring:",
+    await update.message.reply_voice(voice=update.message.voice.file_id,
+        caption=f"Ovoz ({update.message.voice.duration} sek). Eshitib ko'ring:",
         reply_markup=kb)
     return S_REVIEW
 
@@ -179,7 +203,7 @@ async def review_voice(update, ctx):
         await q.edit_message_caption(caption="Qayta yozing — mikrofonni bosing:")
         return S_VOICE
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ O'tkazib yuborish", callback_data="skip_extra")]])
-    await q.edit_message_caption(caption="✅ Ovoz tasdiqlandi! Qo'shimcha yozma fikr bo'lsa yozing:")
+    await q.edit_message_caption(caption="✅ Tasdiqlandi!")
     await q.message.reply_text("Yozma fikr (ixtiyoriy):", reply_markup=kb)
     return S_EXTRA
 
@@ -196,21 +220,23 @@ async def skip_extra(update, ctx):
 async def _save(msg, ctx):
     sid = ctx.user_data["sid"]; db = load_db()
     if sid not in db: db[sid] = []
-    db[sid].append({
-        "teacher": ctx.user_data["name"],
-        "role": ctx.user_data["role"],
-        "detail": ctx.user_data["detail"],
-        "type": "voice",
-        "file_id": ctx.user_data["vfid"],
-        "duration": ctx.user_data.get("vdur", 0),
-        "extra": ctx.user_data.get("extra", ""),
-    })
-    save_db(db)
+    fb = {"teacher": ctx.user_data["name"], "role": ctx.user_data["role"],
+          "detail": ctx.user_data["detail"], "type": "voice",
+          "file_id": ctx.user_data["vfid"], "duration": ctx.user_data.get("vdur", 0),
+          "extra": ctx.user_data.get("extra", ""), "ts": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    db[sid].append(fb); save_db(db)
+    s = ALL[sid]
+    rl = "Fan ustozi" if ctx.user_data["role"] == "teacher" else "Maktab xodimi"
+    atxt = (f"{'📚' if ctx.user_data['role']=='teacher' else '🏫'} YANGI FIKR\n"
+            f"O'quvchi: {s['name']} ({s['grade']})\nKim: {ctx.user_data['name']}\n{rl}: {ctx.user_data['detail']}\n"
+            f"⏱ {ctx.user_data.get('vdur',0)} sek • {fb['ts']}")
+    if fb["extra"]: atxt += f"\n✍️ {fb['extra']}"
+    await notify_admin(ctx, atxt, fb["file_id"], fb["duration"])
     grade = ALL[sid]["grade"]
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🏠 Boshiga qaytish", callback_data="go_start"),
-        InlineKeyboardButton("➡️ Davom ettirish", callback_data=f"cont_{grade.replace('-sinf','')}_{sid}")]])
-    await msg.reply_text(f"✅ {ctx.user_data['sname']} haqidagi fikr saqlandi!\n\nNima qilasiz?", reply_markup=kb)
+        InlineKeyboardButton("🏠 Boshiga", callback_data="go_start"),
+        InlineKeyboardButton("➡️ Davom", callback_data=f"cont_{grade.replace('-sinf','')}_{sid}")]])
+    await msg.reply_text(f"✅ {ctx.user_data['sname']} haqida fikr saqlandi!", reply_markup=kb)
     return S_AFTER
 
 async def after_action(update, ctx):
@@ -220,199 +246,434 @@ async def after_action(update, ctx):
         await q.edit_message_text("Ismingizni yozing:")
         return S_NAME
     if q.data.startswith("cont_"):
-        parts = q.data.split("_", 2)
-        grade = parts[1] + "-sinf"
+        parts = q.data.split("_", 2); grade = parts[1] + "-sinf"
         ctx.user_data["grade"] = grade
         return await _show_list(q, ctx, grade)
 
-# ═════════════ OTA-ONA QISMI ═════════════════════════════════════════════
+async def cancel(update, ctx):
+    for k in ["reply_to_teacher","reply_for_sid","student_sid"]:
+        ctx.user_data.pop(k, None)
+    await update.message.reply_text("Bekor qilindi. /start bosing.")
+    return ConversationHandler.END
+
+# ═══════════ OTA-ONA (QR orqali) ═══════════
 async def show_parent_menu(update, ctx, sid):
     if sid not in ALL:
         await update.message.reply_text("O'quvchi topilmadi.")
         return ConversationHandler.END
-    s = ALL[sid]
+    ctx.user_data.clear()
+    ctx.user_data["parent_sid"] = sid
+    await _parent_menu(update.message, ctx, sid)
+    return ConversationHandler.END
+
+async def _parent_menu(msg_or_q, ctx, sid, edit=False):
+    s = ALL.get(sid)
+    if not s: return
     db = load_db()
     fbs = db.get(sid, [])
-    if not fbs:
-        await update.message.reply_text(
-            f"📭 {s['name']} ({s['grade']}) haqida hali fikr qoldirilmagan.\n"
-            f"Bir ozdan so'ng qayta tekshiring.")
-        return ConversationHandler.END
-    
-    # Fikrlarni rolga ajratamiz
-    teacher_fbs = [f for f in fbs if f.get("role") == "teacher"]
-    staff_fbs = [f for f in fbs if f.get("role") == "staff"]
-    # Eski yozuvlar uchun (role yo'q bo'lsa - teacher deb hisoblanadi)
-    legacy_fbs = [f for f in fbs if "role" not in f]
-    teacher_fbs.extend(legacy_fbs)
-    
-    ctx.user_data["parent_sid"] = sid
-    
-    kb_rows = []
-    if teacher_fbs:
-        kb_rows.append([InlineKeyboardButton(
-            f"📚 Fan ustozlar fikri ({len(teacher_fbs)} ta)",
-            callback_data=f"pcat_t_{sid}")])
-    if staff_fbs:
-        kb_rows.append([InlineKeyboardButton(
-            f"🏫 Maktab xodimlari fikri ({len(staff_fbs)} ta)",
-            callback_data=f"pcat_s_{sid}")])
-    
-    await update.message.reply_text(
-        f"👨‍👩‍👧 {s['name']} ({s['grade']})\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Jami: {len(fbs)} ta fikr\n\n"
-        f"Bo'limni tanlang:",
-        reply_markup=InlineKeyboardMarkup(kb_rows))
-    return ConversationHandler.END
+    tfbs = [f for f in fbs if f.get("role") == "teacher" or "role" not in f]
+    sfbs = [f for f in fbs if f.get("role") == "staff"]
+    cmsgs = db.get("_student_to_parent", {}).get(sid, [])
+    kb = []
+    if tfbs:
+        kb.append([InlineKeyboardButton(f"📚 Ustoz fikri ({len(tfbs)})", callback_data=f"pcat_t_{sid}")])
+    if sfbs:
+        kb.append([InlineKeyboardButton(f"🏫 Maktab xodimi ({len(sfbs)})", callback_data=f"pcat_s_{sid}")])
+    kb.append([InlineKeyboardButton(
+        f"💌 Ota onamga gaplarim ({len(cmsgs)})" if cmsgs else "💌 Ota onamga gaplarim (0)",
+        callback_data=f"pchild_{sid}")])
+    total = len(fbs)
+    txt = (f"👨‍👩‍👧 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n"
+           f"📊 Jami: {total} ta fikr\n\nBo'limni tanlang:" if total else
+           f"📭 {s['name']} ({s['grade']})\nHali fikr yo'q. Keyinroq tekshiring.")
+    if edit:
+        try: await msg_or_q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+        except: await msg_or_q.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        if hasattr(msg_or_q, 'reply_text'):
+            await msg_or_q.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await msg_or_q.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
 async def parent_category(update, ctx):
     q = update.callback_query; await q.answer()
-    parts = q.data.split("_")
-    cat = parts[1]  # 't' or 's'
-    sid = parts[2]
+    parts = q.data.split("_"); cat = parts[1]; sid = parts[2]
     s = ALL.get(sid)
-    if not s:
-        await q.edit_message_text("Xato"); return
-    db = load_db()
-    fbs = db.get(sid, [])
-    
+    if not s: await q.edit_message_text("Xato"); return
+    db = load_db(); fbs = db.get(sid, [])
     if cat == "t":
         items = [f for f in fbs if f.get("role") == "teacher" or "role" not in f]
-        title = "📚 Fan ustozlar fikri"
+        title = "📚 Ustoz fikri"
     else:
         items = [f for f in fbs if f.get("role") == "staff"]
-        title = "🏫 Maktab xodimlari fikri"
-    
+        title = "🏫 Maktab xodimi fikri"
     if not items:
-        await q.edit_message_text(f"{title} - bo'sh."); return
-    
-    # Tugmalar: har bir fan/lavozim alohida
-    kb_rows = []
+        await q.edit_message_text(f"{title} — hali yo'q."); return
+    kb = []
     for i, fb in enumerate(items):
-        detail = fb.get("detail", fb.get("pos", "?"))
-        teacher = fb.get("teacher", "?")
-        # Tugma matni: Fan/Lavozim — Ustoz ismi
-        btn_text = f"{detail} — {teacher}"
-        if len(btn_text) > 50: btn_text = btn_text[:47] + "..."
-        kb_rows.append([InlineKeyboardButton(btn_text, callback_data=f"pfb_{sid}_{cat}_{i}")])
-    kb_rows.append([InlineKeyboardButton("🔙 Orqaga", callback_data=f"pback_{sid}")])
-    
-    await q.edit_message_text(
-        f"{title}\n━━━━━━━━━━━━━━━━━━━━\n{s['name']}\n\n"
-        f"Quyidagilardan tanlang:",
-        reply_markup=InlineKeyboardMarkup(kb_rows))
+        d = fb.get("detail", "?"); t = fb.get("teacher", "?")
+        lbl = f"{d} — {t}"
+        if len(lbl) > 50: lbl = lbl[:47] + "..."
+        kb.append([InlineKeyboardButton(lbl, callback_data=f"pfb_{sid}_{cat}_{i}")])
+    kb.append([InlineKeyboardButton("🔙 Orqaga", callback_data=f"pmenu_{sid}")])
+    await q.edit_message_text(f"{title}\n{s['name']}\n\nTanlang:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def parent_show_fb(update, ctx):
     q = update.callback_query; await q.answer()
-    parts = q.data.split("_")
-    sid = parts[1]; cat = parts[2]; idx = int(parts[3])
-    db = load_db()
-    fbs = db.get(sid, [])
+    parts = q.data.split("_"); sid = parts[1]; cat = parts[2]; idx = int(parts[3])
+    db = load_db(); fbs = db.get(sid, [])
     if cat == "t":
         items = [f for f in fbs if f.get("role") == "teacher" or "role" not in f]
     else:
         items = [f for f in fbs if f.get("role") == "staff"]
     if idx >= len(items): return
-    fb = items[idx]
-    s = ALL[sid]
-    
-    detail = fb.get("detail", fb.get("pos", ""))
+    fb = items[idx]; s = ALL[sid]
     teacher = fb.get("teacher", "?")
-    role_label = "Fan ustozi" if (fb.get("role") == "teacher" or "role" not in fb) else "Maktab xodimi"
-    
-    header = (f"👤 O'quvchi: {s['name']}\n"
-              f"━━━━━━━━━━━━━━━━━━━━\n"
-              f"🧑‍🏫 {teacher}\n"
-              f"📌 {role_label}: {detail}")
-    
-    await q.message.reply_text(header)
-    
+    rl = "Fan ustozi" if (fb.get("role") == "teacher" or "role" not in fb) else "Maktab xodimi"
+    await q.message.reply_text(f"👤 {s['name']}\n🧑‍🏫 {teacher}\n📌 {rl}: {fb.get('detail','')}")
     if fb.get("type") == "voice" and fb.get("file_id"):
-        await q.message.reply_voice(
-            voice=fb["file_id"],
-            caption=f"🎙 Ovozli fikr ({fb.get('duration', 0)} sek)")
-    
+        await q.message.reply_voice(voice=fb["file_id"], caption=f"🎙 ({fb.get('duration',0)} sek)")
     if fb.get("extra"):
-        await q.message.reply_text(f"💬 Qo'shimcha yozma fikr:\n\n{fb['extra']}")
-    elif fb.get("text"):
-        await q.message.reply_text(f"💬 Yozma fikr:\n\n{fb['text']}")
-    
-    # Orqaga tugmasi
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔙 Ro'yxatga qaytish", callback_data=f"pcat_{cat}_{sid}"),
-        InlineKeyboardButton("🏠 Bosh menyu", callback_data=f"pback_{sid}")]])
-    await q.message.reply_text("Davom etish:", reply_markup=kb)
+        await q.message.reply_text(f"💬 Yozma: {fb['extra']}")
+    # Navigatsiya
+    prev_btn = []; next_btn = []
+    if idx > 0:
+        prev_btn = [InlineKeyboardButton("⬅️ Oldingi", callback_data=f"pfb_{sid}_{cat}_{idx-1}")]
+    if idx < len(items) - 1:
+        next_btn = [InlineKeyboardButton("Keyingi ➡️", callback_data=f"pfb_{sid}_{cat}_{idx+1}")]
+    nav = prev_btn + next_btn
+    kb = []
+    if nav: kb.append(nav)
+    kb.append([InlineKeyboardButton(f"💬 {teacher[:20]} ga javob", callback_data=f"preply_{sid}_{cat}_{idx}")])
+    kb.append([InlineKeyboardButton("🔙 Ro'yxat", callback_data=f"pcat_{cat}_{sid}"),
+               InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")])
+    await q.message.reply_text("━━━━━━━━━━━━━━━━━", reply_markup=InlineKeyboardMarkup(kb))
 
-async def parent_back(update, ctx):
+async def parent_menu_btn(update, ctx):
     q = update.callback_query; await q.answer()
-    sid = q.data.replace("pback_", "")
+    sid = q.data.replace("pmenu_", "")
+    await _parent_menu(q, ctx, sid, edit=False)
+
+async def parent_show_child(update, ctx):
+    q = update.callback_query; await q.answer()
+    sid = q.data.replace("pchild_", "")
     s = ALL.get(sid)
     if not s: return
     db = load_db()
-    fbs = db.get(sid, [])
-    teacher_fbs = [f for f in fbs if f.get("role") == "teacher" or "role" not in f]
-    staff_fbs = [f for f in fbs if f.get("role") == "staff"]
-    
-    kb_rows = []
-    if teacher_fbs:
-        kb_rows.append([InlineKeyboardButton(
-            f"📚 Fan ustozlar fikri ({len(teacher_fbs)} ta)",
-            callback_data=f"pcat_t_{sid}")])
-    if staff_fbs:
-        kb_rows.append([InlineKeyboardButton(
-            f"🏫 Maktab xodimlari fikri ({len(staff_fbs)} ta)",
-            callback_data=f"pcat_s_{sid}")])
-    
+    msgs = db.get("_student_to_parent", {}).get(sid, [])
+    if not msgs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
+        await q.message.reply_text(
+            f"📭 {s['name']} hali ichidagi gaplarini aytmagan.\n"
+            f"O'quvchi /bolaman buyrug'i orqali kirib gapirishi mumkin.", reply_markup=kb)
+        return
+    await q.message.reply_text(f"💌 {s['name']} aytgan gaplar ({len(msgs)} ta):")
+    for i, m in enumerate(msgs, 1):
+        ts = m.get("ts", "")
+        if m["type"] == "voice":
+            await q.message.reply_voice(voice=m["file_id"],
+                caption=f"🎙 #{i} ({m.get('duration',0)} sek) • {ts}")
+        else:
+            await q.message.reply_text(f"✍️ #{i} • {ts}\n{m.get('text','')}")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
+    await q.message.reply_text("━━━━━━━━━━━━━━━━━", reply_markup=kb)
+
+async def parent_reply_start(update, ctx):
+    q = update.callback_query; await q.answer()
+    parts = q.data.split("_"); sid = parts[1]; cat = parts[2]; idx = int(parts[3])
+    db = load_db(); fbs = db.get(sid, [])
+    if cat == "t":
+        items = [f for f in fbs if f.get("role") == "teacher" or "role" not in f]
+    else:
+        items = [f for f in fbs if f.get("role") == "staff"]
+    if idx >= len(items): return
+    teacher = items[idx].get("teacher", "?")
+    ctx.user_data["reply_to_teacher"] = teacher
+    ctx.user_data["reply_for_sid"] = sid
     await q.message.reply_text(
-        f"👨‍👩‍👧 {s['name']} ({s['grade']})\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Jami: {len(fbs)} ta fikr\n\nBo'limni tanlang:",
-        reply_markup=InlineKeyboardMarkup(kb_rows))
+        f"💬 {teacher} ga javobingiz\n\n🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
 
-# ── Admin /list ───────────────────────────────────────────────────────────
-async def cmd_list(update, ctx):
+# ═══════════ O'QUVCHI /bolaman ═══════════
+async def cmd_bolaman(update, ctx):
+    ctx.user_data.clear()
+    ctx.user_data["_student_search"] = True
+    await update.message.reply_text(
+        "🎓 Salom, aziz o'quvchi!\n\n"
+        "Ismingiz YOKI familiyangizni yozing.\n"
+        "Masalan: Javohir yoki Alijonov\n\n"
+        "Bekor: /cancel")
+
+# ═══════════ DISPATCH (konv tashqari) ═══════════
+async def dispatch_message(update, ctx):
+    # O'quvchi ism qidiryapti
+    if ctx.user_data.get("_student_search"):
+        return await _student_search(update, ctx)
+    # Ota-ona javob yozyapti
+    if "reply_to_teacher" in ctx.user_data:
+        return await _save_parent_reply(update, ctx)
+    # O'quvchi xabar yozyapti
+    if "student_sid" in ctx.user_data:
+        return await _save_student_msg(update, ctx)
+    await update.message.reply_text("Boshlash: /start (ustoz) yoki /bolaman (o'quvchi)")
+
+async def _student_search(update, ctx):
+    ctx.user_data.pop("_student_search", None)
+    text = update.message.text.strip()
+    result = find_student_by_name(text)
+    if result is None:
+        ctx.user_data["_student_search"] = True
+        await update.message.reply_text("❌ Topilmadi. Ism yoki familiyangizni qayta yozing.\nBekor: /cancel")
+        return
+    if isinstance(result, list):
+        kb = []
+        for sid in result[:10]:
+            s = ALL[sid]
+            kb.append([InlineKeyboardButton(f"{s['name']} ({s['grade']})", callback_data=f"stpick_{sid}")])
+        kb.append([InlineKeyboardButton("❌ Bekor", callback_data="st_cancel")])
+        await update.message.reply_text("Bir nechta topildi. O'zingizni tanlang:",
+                                        reply_markup=InlineKeyboardMarkup(kb))
+        return
+    # Bitta topildi
+    sid = result; s = ALL[sid]
+    ctx.user_data["student_sid"] = sid
+    await update.message.reply_text(
+        f"🎓 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n\n"
+        f"Ota-onangizga aytmoqchi bo'lgan gapingizni yozing:\n\n"
+        f"• Sevingan paytlaringiz\n• Xafa bo'lganingiz\n• Ichingizdagi gaplar\n"
+        f"• Ota-onangizga rahmat\n\n"
+        f"🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+
+async def student_pick(update, ctx):
+    q = update.callback_query; await q.answer()
+    if q.data == "st_cancel":
+        await q.edit_message_text("Bekor qilindi. /bolaman qayta bosing.")
+        return
+    sid = q.data.replace("stpick_", "")
+    s = ALL.get(sid)
+    if not s: return
+    ctx.user_data["student_sid"] = sid
+    await q.edit_message_text(
+        f"🎓 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n\n"
+        f"Ota-onangizga gapingizni yozing:\n\n"
+        f"🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+
+async def _save_student_msg(update, ctx):
+    sid = ctx.user_data["student_sid"]
     db = load_db()
-    if not db: await update.message.reply_text("Hali fikr yo'q."); return
-    lines = []
+    if "_student_to_parent" not in db: db["_student_to_parent"] = {}
+    if sid not in db["_student_to_parent"]: db["_student_to_parent"][sid] = []
+    entry = {"from_user_id": update.effective_user.id,
+             "ts": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    if update.message.voice:
+        entry["type"] = "voice"
+        entry["file_id"] = update.message.voice.file_id
+        entry["duration"] = update.message.voice.duration
+    else:
+        entry["type"] = "text"
+        entry["text"] = update.message.text or ""
+    db["_student_to_parent"][sid].append(entry); save_db(db)
+    s = ALL.get(sid, {})
+    atxt = f"🎓 O'QUVCHI → OTA-ONA\n{s.get('name','?')} ({s.get('grade','?')})\n{entry['ts']}"
+    if entry["type"] == "text": atxt += f"\n✍️ {entry.get('text','')}"
+    await notify_admin(ctx, atxt, entry.get("file_id"), entry.get("duration", 0))
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Yana yozish", callback_data=f"stmore_{sid}")],
+        [InlineKeyboardButton("✅ Tugatdim", callback_data="st_done")]])
+    await update.message.reply_text("✅ Gapingiz ota-onangizga yetkaziladi!\nYana yozasizmi?", reply_markup=kb)
+
+async def student_more(update, ctx):
+    q = update.callback_query; await q.answer()
+    sid = q.data.replace("stmore_", "")
+    ctx.user_data["student_sid"] = sid
+    await q.edit_message_text("🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+
+async def student_done(update, ctx):
+    q = update.callback_query; await q.answer()
+    ctx.user_data.pop("student_sid", None)
+    await q.edit_message_text("Rahmat! Ota-onangiz QR kod orqali eshitadi.")
+
+async def _save_parent_reply(update, ctx):
+    teacher = ctx.user_data.pop("reply_to_teacher")
+    sid = ctx.user_data.pop("reply_for_sid")
+    db = load_db()
+    if "_parent_replies" not in db: db["_parent_replies"] = {}
+    if teacher not in db["_parent_replies"]: db["_parent_replies"][teacher] = []
+    entry = {"sid": sid, "from_user_id": update.effective_user.id,
+             "from_user_name": update.effective_user.full_name,
+             "ts": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    if update.message.voice:
+        entry["type"] = "voice"; entry["file_id"] = update.message.voice.file_id
+        entry["duration"] = update.message.voice.duration
+    else:
+        entry["type"] = "text"; entry["text"] = update.message.text or ""
+    db["_parent_replies"][teacher].append(entry); save_db(db)
+    s = ALL.get(sid, {})
+    atxt = f"💬 OTA-ONA → USTOZ\n{s.get('name','?')} → {teacher}\n{entry['from_user_name']}\n{entry['ts']}"
+    if entry["type"] == "text": atxt += f"\n✍️ {entry['text']}"
+    await notify_admin(ctx, atxt, entry.get("file_id"), entry.get("duration", 0))
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
+    await update.message.reply_text(f"✅ Javob {teacher} ga yetkazildi!", reply_markup=kb)
+
+# ═══════════ ADMIN ═══════════
+async def cmd_admin(update, ctx):
+    global ADMIN_ID
+    uid = update.effective_user.id; db = load_db()
+    if not ADMIN_ID and not db.get("_admin_id"):
+        db["_admin_id"] = uid; save_db(db); ADMIN_ID = uid
+        await update.message.reply_text(
+            f"✅ ADMIN bo'ldingiz! (ID: {uid})\n"
+            f"Barcha fikrlar real vaqtda sizga keladi.\n\n"
+            f"/admin — panel\n/list — fikrlar\n/inbox — ota-ona javoblari")
+        return
+    if uid != get_admin_id():
+        await update.message.reply_text("❌ Faqat admin uchun."); return
+    tc=sc=rc=cc=0; swfb=set(); ts=set()
     for sid, fbs in db.items():
-        if sid in ALL:
-            t = sum(1 for f in fbs if f.get("role")=="teacher" or "role" not in f)
-            s = sum(1 for f in fbs if f.get("role")=="staff")
-            lines.append(f"{ALL[sid]['name']} ({ALL[sid]['grade']}) - Ustoz:{t}, Xodim:{s}")
-    await update.message.reply_text("Fikr qoldirilganlar:\n" + "\n".join(lines))
+        if sid.startswith("_") or not isinstance(fbs, list): continue
+        for f in fbs:
+            if f.get("role")=="staff": sc+=1
+            else: tc+=1
+            ts.add(f.get("teacher","?"))
+        if fbs: swfb.add(sid)
+    for t,rs in db.get("_parent_replies",{}).items(): rc+=len(rs)
+    for s,ms in db.get("_student_to_parent",{}).items(): cc+=len(ms)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📚 Ustozlar", callback_data="adm_teachers"),
+         InlineKeyboardButton("👥 O'quvchilar", callback_data="adm_students")],
+        [InlineKeyboardButton("💬 Ota-ona javob", callback_data="adm_replies"),
+         InlineKeyboardButton("🎓 Bola gaplari", callback_data="adm_children")]])
+    await update.message.reply_text(
+        f"🛡 ADMIN PANEL\n━━━━━━━━━━━━━━━━━\n"
+        f"📚 Ustoz: {tc} | 🏫 Xodim: {sc}\n💬 Javob: {rc} | 🎓 Bola: {cc}\n"
+        f"👥 {len(swfb)}/{len(ALL)} o'quvchi | 🧑‍🏫 {len(ts)} ustoz", reply_markup=kb)
 
-async def cancel(update, ctx):
-    await update.message.reply_text("Bekor qilindi. /start bosing.")
-    return ConversationHandler.END
+async def admin_callback(update, ctx):
+    q = update.callback_query; await q.answer()
+    if q.from_user.id != get_admin_id():
+        await q.message.reply_text("❌ Faqat admin."); return
+    db = load_db(); action = q.data.replace("adm_","")
+    if action == "teachers":
+        agg = {}
+        for sid,fbs in db.items():
+            if sid.startswith("_") or not isinstance(fbs,list): continue
+            for f in fbs: t=f.get("teacher","?"); agg[t]=agg.get(t,0)+1
+        if not agg: await q.message.reply_text("Yo'q."); return
+        lines = ["📚 Ustozlar:"]
+        for t,c in sorted(agg.items(),key=lambda x:-x[1]): lines.append(f"• {t}: {c}")
+        await q.message.reply_text("\n".join(lines))
+    elif action == "students":
+        lines = ["👥 O'quvchilar:"]
+        for sid,info in ALL.items():
+            fbs = db.get(sid,[])
+            t=sum(1 for f in fbs if f.get("role")=="teacher" or "role" not in f)
+            s=sum(1 for f in fbs if f.get("role")=="staff")
+            c=len(db.get("_student_to_parent",{}).get(sid,[]))
+            st = "✅" if (t+s)>0 else "⬜"
+            ex = f" 🎓{c}" if c else ""
+            lines.append(f"{st} {info['name']} ({info['grade']}) U:{t} X:{s}{ex}")
+        txt = "\n".join(lines)
+        for i in range(0,len(txt),3500): await q.message.reply_text(txt[i:i+3500])
+    elif action == "replies":
+        rr = db.get("_parent_replies",{})
+        if not rr: await q.message.reply_text("Yo'q."); return
+        lines = ["💬 Ota-ona javoblari:"]
+        for t,rs in rr.items(): lines.append(f"• {t}: {len(rs)}")
+        lines.append("\n/inbox <ustoz> orqali ko'ring")
+        await q.message.reply_text("\n".join(lines))
+    elif action == "children":
+        ch = db.get("_student_to_parent",{})
+        if not ch: await q.message.reply_text("Yo'q."); return
+        total = sum(len(v) for v in ch.values())
+        await q.message.reply_text(f"🎓 Bola gaplari ({total} ta):")
+        for sid,msgs in ch.items():
+            s = ALL.get(sid,{"name":"?","grade":"?"})
+            await q.message.reply_text(f"👤 {s['name']} ({s['grade']}) — {len(msgs)}")
+            for i,m in enumerate(msgs,1):
+                if m["type"]=="voice":
+                    await q.message.reply_voice(voice=m["file_id"],
+                        caption=f"#{i} ({m.get('duration',0)}s) {m.get('ts','')}")
+                else:
+                    await q.message.reply_text(f"#{i} {m.get('ts','')}\n{m.get('text','')}")
 
+# ═══════════ /inbox ═══════════
+async def cmd_inbox(update, ctx):
+    db = load_db(); rbt = db.get("_parent_replies",{})
+    args = ctx.args
+    if not args:
+        if not rbt:
+            await update.message.reply_text("Hali javob yo'q.\n/inbox <ism familiya>"); return
+        lines = ["Javob kelgan ustozlar:"]
+        for t,rs in rbt.items(): lines.append(f"• {t}: {len(rs)}")
+        lines.append("\n/inbox <ism>"); await update.message.reply_text("\n".join(lines)); return
+    name = " ".join(args).strip()
+    rs = rbt.get(name,[])
+    if not rs:
+        mm = [t for t in rbt if name.lower() in t.lower()]
+        if len(mm)==1: name=mm[0]; rs=rbt[name]
+        elif mm: await update.message.reply_text("Mos:\n"+"\n".join(mm)); return
+        else: await update.message.reply_text(f"'{name}' topilmadi."); return
+    await update.message.reply_text(f"💬 {name} ga javoblar ({len(rs)}):")
+    for r in rs:
+        s = ALL.get(r["sid"],{"name":"?","grade":"?"})
+        await update.message.reply_text(f"👨‍👩‍👧 {s['name']} ({s['grade']}) • {r.get('ts','')}")
+        if r["type"]=="voice":
+            await update.message.reply_voice(voice=r["file_id"],caption=f"({r.get('duration',0)}s)")
+        else: await update.message.reply_text(r.get("text",""))
+
+async def cmd_list(update, ctx):
+    db = load_db(); lines = []
+    for sid,fbs in db.items():
+        if sid.startswith("_") or not isinstance(fbs,list) or sid not in ALL: continue
+        if fbs:
+            t=sum(1 for f in fbs if f.get("role")=="teacher" or "role" not in f)
+            s=sum(1 for f in fbs if f.get("role")=="staff")
+            lines.append(f"{ALL[sid]['name']} ({ALL[sid]['grade']}) U:{t} X:{s}")
+    if not lines: await update.message.reply_text("Hali fikr yo'q."); return
+    txt = "Fikr qoldirilganlar:\n"+"\n".join(lines)
+    for i in range(0,len(txt),3500): await update.message.reply_text(txt[i:i+3500])
+
+# ═══════════ MAIN ═══════════
 def main():
-    if not TOKEN: raise ValueError("BOT_TOKEN not set!")
+    if not TOKEN: raise ValueError("BOT_TOKEN!")
     app = Application.builder().token(TOKEN).build()
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            S_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            S_ROLE:   [CallbackQueryHandler(pick_role, pattern="^r_")],
+            S_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            S_ROLE: [CallbackQueryHandler(pick_role, pattern="^r_")],
             S_DETAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_detail)],
-            S_GRADE:  [CallbackQueryHandler(pick_grade, pattern="^g_")],
-            S_STU:    [CallbackQueryHandler(pick_stu, pattern="^(s_|back_grade)")],
-            S_VOICE:  [MessageHandler(filters.VOICE, recv_voice)],
+            S_GRADE: [CallbackQueryHandler(pick_grade, pattern="^g_")],
+            S_STU: [CallbackQueryHandler(pick_stu, pattern="^(s_|back_grade)")],
+            S_VOICE: [MessageHandler(filters.VOICE, recv_voice)],
             S_REVIEW: [CallbackQueryHandler(review_voice, pattern="^(ok_voice|redo_voice)$")],
-            S_EXTRA:  [MessageHandler(filters.TEXT & ~filters.COMMAND, recv_extra),
-                       CallbackQueryHandler(skip_extra, pattern="^skip_extra$")],
-            S_AFTER:  [CallbackQueryHandler(after_action, pattern="^(go_start|cont_)")],
+            S_EXTRA: [MessageHandler(filters.TEXT & ~filters.COMMAND, recv_extra),
+                      CallbackQueryHandler(skip_extra, pattern="^skip_extra$")],
+            S_AFTER: [CallbackQueryHandler(after_action, pattern="^(go_start|cont_)")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
     )
     app.add_handler(conv)
-    # Parent view callbacks (outside conversation)
+    # O'quvchi
+    app.add_handler(CommandHandler("bolaman", cmd_bolaman))
+    app.add_handler(CallbackQueryHandler(student_pick, pattern="^(stpick_|st_cancel)"))
+    app.add_handler(CallbackQueryHandler(student_more, pattern="^stmore_"))
+    app.add_handler(CallbackQueryHandler(student_done, pattern="^st_done$"))
+    # Ota-ona
     app.add_handler(CallbackQueryHandler(parent_category, pattern="^pcat_"))
     app.add_handler(CallbackQueryHandler(parent_show_fb, pattern="^pfb_"))
-    app.add_handler(CallbackQueryHandler(parent_back, pattern="^pback_"))
+    app.add_handler(CallbackQueryHandler(parent_menu_btn, pattern="^pmenu_"))
+    app.add_handler(CallbackQueryHandler(parent_show_child, pattern="^pchild_"))
+    app.add_handler(CallbackQueryHandler(parent_reply_start, pattern="^preply_"))
+    # Admin
+    app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^adm_"))
+    app.add_handler(CommandHandler("inbox", cmd_inbox))
     app.add_handler(CommandHandler("list", cmd_list))
-    print("Bot v5 ishga tushdi!")
+    app.add_handler(CommandHandler("cancel", cancel))
+    # Dispatch
+    app.add_handler(MessageHandler((filters.VOICE|(filters.TEXT&~filters.COMMAND)), dispatch_message))
+    print("Bot v6 — Admin + Alohida ota-ona/o'quvchi + Navigatsiya")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
