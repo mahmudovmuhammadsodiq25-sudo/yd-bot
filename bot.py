@@ -1,9 +1,9 @@
-import os, json, logging
+import os, json, logging, csv, io
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (Application, CommandHandler, MessageHandler,
-                          CallbackQueryHandler, ConversationHandler,
-                          filters, ContextTypes)
+                           CallbackQueryHandler, ConversationHandler,
+                           filters, ContextTypes, JobQueue)
 
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -87,7 +87,6 @@ async def notify_admin(ctx, text, voice_file_id=None, duration=0):
         logging.error(f"Admin notify: {e}")
 
 def find_student_by_name(text):
-    """Ism yoki familiya bo'yicha o'quvchini topish"""
     t = text.strip().lower()
     matches = []
     for sid, info in ALL.items():
@@ -95,7 +94,6 @@ def find_student_by_name(text):
         if t in parts or t == info["name"].lower():
             matches.append(sid)
     if len(matches) == 1: return matches[0]
-    # Qisman mos
     for sid, info in ALL.items():
         if t in info["name"].lower():
             matches.append(sid)
@@ -132,7 +130,7 @@ async def pick_role(update, ctx):
     ctx.user_data["role"] = role
     prompt = "Qaysi fanni o'qitasiz?" if role == "teacher" else "Lavozimingiz nima?"
     label = "Fan o'qituvchisi" if role == "teacher" else "Maktab xodimi"
-    await q.edit_message_text(f"{'📚' if role=='teacher' else '🏫'} {label}: {ctx.user_data['name']}\n\n{prompt}")
+    await q.edit_message_text(f"{'\ud83d\udcda' if role=='teacher' else '\ud83c\udfeb'} {label}: {ctx.user_data['name']}\n\n{prompt}")
     return S_DETAIL
 
 async def get_detail(update, ctx):
@@ -161,12 +159,12 @@ async def _show_list(q, ctx, grade):
     for sid, info in ALL.items():
         if info["grade"] != grade: continue
         cnt += 1
-        lbl = f"{cnt}. {'✅' if sid in done else ''}{info['display']}"
+        lbl = f"{cnt}. {'\u2705' if sid in done else ''}{info['display']}"
         row.append(InlineKeyboardButton(lbl, callback_data=f"s_{sid}"))
         if len(row)==2: rows.append(row); row = []
     if row: rows.append(row)
-    rows.append([InlineKeyboardButton("🔙 Sinf tanlash", callback_data="back_grade")])
-    txt = f"{grade} o'quvchilari:\n(✅ — siz fikr bildirganlar)"
+    rows.append([InlineKeyboardButton("\ud83d\udd19 Sinf tanlash", callback_data="back_grade")])
+    txt = f"{grade} o'quvchilari:\n(\u2705 \u2014 siz fikr bildirganlar)"
     try: await q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(rows))
     except: await q.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(rows))
     return S_STU
@@ -182,7 +180,7 @@ async def pick_stu(update, ctx):
     sid = q.data.replace("s_",""); s = ALL[sid]
     ctx.user_data["sid"] = sid; ctx.user_data["sname"] = s["name"]
     await q.edit_message_text(
-        f"{s['name']} ({s['grade']})\n\n🎙 Ovozli xabar yuboring:\n"
+        f"{s['name']} ({s['grade']})\n\n\ud83c\udfa4 Ovozli xabar yuboring:\n"
         f"Mikrofonni bosing va gapiring.")
     return S_VOICE
 
@@ -190,20 +188,20 @@ async def recv_voice(update, ctx):
     ctx.user_data["vfid"] = update.message.voice.file_id
     ctx.user_data["vdur"] = update.message.voice.duration
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Tasdiqlash", callback_data="ok_voice"),
-        InlineKeyboardButton("🔄 Qayta yozish", callback_data="redo_voice")]])
+        InlineKeyboardButton("\u2705 Tasdiqlash", callback_data="ok_voice"),
+        InlineKeyboardButton("\ud83d\udd04 Qayta yozish", callback_data="redo_voice")]])
     await update.message.reply_voice(voice=update.message.voice.file_id,
-        caption=f"Ovoz ({update.message.voice.duration} sek). Eshitib ko'ring:",
-        reply_markup=kb)
+                                     caption=f"Ovoz ({update.message.voice.duration} sek). Eshitib ko'ring:",
+                                     reply_markup=kb)
     return S_REVIEW
 
 async def review_voice(update, ctx):
     q = update.callback_query; await q.answer()
     if q.data == "redo_voice":
-        await q.edit_message_caption(caption="Qayta yozing — mikrofonni bosing:")
+        await q.edit_message_caption(caption="Qayta yozing \u2014 mikrofonni bosing:")
         return S_VOICE
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ O'tkazib yuborish", callback_data="skip_extra")]])
-    await q.edit_message_caption(caption="✅ Tasdiqlandi!")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("\u27a1\ufe0f O'tkazib yuborish", callback_data="skip_extra")]])
+    await q.edit_message_caption(caption="\u2705 Tasdiqlandi!")
     await q.message.reply_text("Yozma fikr (ixtiyoriy):", reply_markup=kb)
     return S_EXTRA
 
@@ -227,16 +225,16 @@ async def _save(msg, ctx):
     db[sid].append(fb); save_db(db)
     s = ALL[sid]
     rl = "Fan ustozi" if ctx.user_data["role"] == "teacher" else "Maktab xodimi"
-    atxt = (f"{'📚' if ctx.user_data['role']=='teacher' else '🏫'} YANGI FIKR\n"
+    atxt = (f"{'\ud83d\udcda' if ctx.user_data['role']=='teacher' else '\ud83c\udfeb'} YANGI FIKR\n"
             f"O'quvchi: {s['name']} ({s['grade']})\nKim: {ctx.user_data['name']}\n{rl}: {ctx.user_data['detail']}\n"
-            f"⏱ {ctx.user_data.get('vdur',0)} sek • {fb['ts']}")
-    if fb["extra"]: atxt += f"\n✍️ {fb['extra']}"
+            f"\u23f1 {ctx.user_data.get('vdur',0)} sek \u2022 {fb['ts']}")
+    if fb["extra"]: atxt += f"\n\u270d\ufe0f {fb['extra']}"
     await notify_admin(ctx, atxt, fb["file_id"], fb["duration"])
     grade = ALL[sid]["grade"]
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🏠 Boshiga", callback_data="go_start"),
-        InlineKeyboardButton("➡️ Davom", callback_data=f"cont_{grade.replace('-sinf','')}_{sid}")]])
-    await msg.reply_text(f"✅ {ctx.user_data['sname']} haqida fikr saqlandi!", reply_markup=kb)
+        InlineKeyboardButton("\ud83c\udfe0 Boshiga", callback_data="go_start"),
+        InlineKeyboardButton("\u27a1\ufe0f Davom", callback_data=f"cont_{grade.replace('-sinf','')}_{sid}")]])
+    await msg.reply_text(f"\u2705 {ctx.user_data['sname']} haqida fikr saqlandi!", reply_markup=kb)
     return S_AFTER
 
 async def after_action(update, ctx):
@@ -283,9 +281,14 @@ async def _parent_menu(msg_or_q, ctx, sid, edit=False):
         f"💌 Ota onamga gaplarim ({len(cmsgs)})" if cmsgs else "💌 Ota onamga gaplarim (0)",
         callback_data=f"pchild_{sid}")])
     total = len(fbs)
-    txt = (f"👨‍👩‍👧 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n"
-           f"📊 Jami: {total} ta fikr\n\nBo'limni tanlang:" if total else
-           f"📭 {s['name']} ({s['grade']})\nHali fikr yo'q. Keyinroq tekshiring.")
+    txt = (f"👨‍👩‍👧 {s['name']} ({s['grade']})
+━━━━━━━━━━━━━━━━━
+"
+           f"📊 Jami: {total} ta fikr
+
+Bo'limni tanlang:" if total else
+           f"📭 {s['name']} ({s['grade']})
+Hali fikr yo'q. Keyinroq tekshiring.")
     if edit:
         try: await msg_or_q.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
         except: await msg_or_q.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb))
@@ -316,7 +319,10 @@ async def parent_category(update, ctx):
         if len(lbl) > 50: lbl = lbl[:47] + "..."
         kb.append([InlineKeyboardButton(lbl, callback_data=f"pfb_{sid}_{cat}_{i}")])
     kb.append([InlineKeyboardButton("🔙 Orqaga", callback_data=f"pmenu_{sid}")])
-    await q.edit_message_text(f"{title}\n{s['name']}\n\nTanlang:", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(f"{title}
+{s['name']}
+
+Tanlang:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def parent_show_fb(update, ctx):
     q = update.callback_query; await q.answer()
@@ -330,12 +336,13 @@ async def parent_show_fb(update, ctx):
     fb = items[idx]; s = ALL[sid]
     teacher = fb.get("teacher", "?")
     rl = "Fan ustozi" if (fb.get("role") == "teacher" or "role" not in fb) else "Maktab xodimi"
-    await q.message.reply_text(f"👤 {s['name']}\n🧑‍🏫 {teacher}\n📌 {rl}: {fb.get('detail','')}")
+    await q.message.reply_text(f"👤 {s['name']}
+🧑‍🏫 {teacher}
+📌 {rl}: {fb.get('detail','')}")
     if fb.get("type") == "voice" and fb.get("file_id"):
-        await q.message.reply_voice(voice=fb["file_id"], caption=f"🎙 ({fb.get('duration',0)} sek)")
+        await q.message.reply_voice(voice=fb["file_id"], caption=f"🎤 ({fb.get('duration',0)} sek)")
     if fb.get("extra"):
         await q.message.reply_text(f"💬 Yozma: {fb['extra']}")
-    # Navigatsiya
     prev_btn = []; next_btn = []
     if idx > 0:
         prev_btn = [InlineKeyboardButton("⬅️ Oldingi", callback_data=f"pfb_{sid}_{cat}_{idx-1}")]
@@ -364,7 +371,8 @@ async def parent_show_child(update, ctx):
     if not msgs:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
         await q.message.reply_text(
-            f"📭 {s['name']} hali ichidagi gaplarini aytmagan.\n"
+            f"📭 {s['name']} hali ichidagi gaplarini aytmagan.
+"
             f"O'quvchi /bolaman buyrug'i orqali kirib gapirishi mumkin.", reply_markup=kb)
         return
     await q.message.reply_text(f"💌 {s['name']} aytgan gaplar ({len(msgs)} ta):")
@@ -372,9 +380,10 @@ async def parent_show_child(update, ctx):
         ts = m.get("ts", "")
         if m["type"] == "voice":
             await q.message.reply_voice(voice=m["file_id"],
-                caption=f"🎙 #{i} ({m.get('duration',0)} sek) • {ts}")
+                                        caption=f"🎤 #{i} ({m.get('duration',0)} sek) • {ts}")
         else:
-            await q.message.reply_text(f"✍️ #{i} • {ts}\n{m.get('text','')}")
+            await q.message.reply_text(f"✍️ #{i} • {ts}
+{m.get('text','')}")
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
     await q.message.reply_text("━━━━━━━━━━━━━━━━━", reply_markup=kb)
 
@@ -391,27 +400,32 @@ async def parent_reply_start(update, ctx):
     ctx.user_data["reply_to_teacher"] = teacher
     ctx.user_data["reply_for_sid"] = sid
     await q.message.reply_text(
-        f"💬 {teacher} ga javobingiz\n\n🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+        f"💬 {teacher} ga javobingiz
+
+🎤 Ovoz yoki ✍️ matn yuboring.
+Bekor: /cancel")
 
 # ═══════════ O'QUVCHI /bolaman ═══════════
 async def cmd_bolaman(update, ctx):
     ctx.user_data.clear()
     ctx.user_data["_student_search"] = True
     await update.message.reply_text(
-        "🎓 Salom, aziz o'quvchi!\n\n"
-        "Ismingiz YOKI familiyangizni yozing.\n"
-        "Masalan: Javohir yoki Alijonov\n\n"
+        "🎓 Salom, aziz o'quvchi!
+
+"
+        "Ismingiz YOKI familiyangizni yozing.
+"
+        "Masalan: Javohir yoki Alijonov
+
+"
         "Bekor: /cancel")
 
 # ═══════════ DISPATCH (konv tashqari) ═══════════
 async def dispatch_message(update, ctx):
-    # O'quvchi ism qidiryapti
     if ctx.user_data.get("_student_search"):
         return await _student_search(update, ctx)
-    # Ota-ona javob yozyapti
     if "reply_to_teacher" in ctx.user_data:
         return await _save_parent_reply(update, ctx)
-    # O'quvchi xabar yozyapti
     if "student_sid" in ctx.user_data:
         return await _save_student_msg(update, ctx)
     await update.message.reply_text("Boshlash: /start (ustoz) yoki /bolaman (o'quvchi)")
@@ -422,7 +436,8 @@ async def _student_search(update, ctx):
     result = find_student_by_name(text)
     if result is None:
         ctx.user_data["_student_search"] = True
-        await update.message.reply_text("❌ Topilmadi. Ism yoki familiyangizni qayta yozing.\nBekor: /cancel")
+        await update.message.reply_text("❌ Topilmadi. Ism yoki familiyangizni qayta yozing.
+Bekor: /cancel")
         return
     if isinstance(result, list):
         kb = []
@@ -433,15 +448,25 @@ async def _student_search(update, ctx):
         await update.message.reply_text("Bir nechta topildi. O'zingizni tanlang:",
                                         reply_markup=InlineKeyboardMarkup(kb))
         return
-    # Bitta topildi
     sid = result; s = ALL[sid]
     ctx.user_data["student_sid"] = sid
     await update.message.reply_text(
-        f"🎓 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n\n"
-        f"Ota-onangizga aytmoqchi bo'lgan gapingizni yozing:\n\n"
-        f"• Sevingan paytlaringiz\n• Xafa bo'lganingiz\n• Ichingizdagi gaplar\n"
-        f"• Ota-onangizga rahmat\n\n"
-        f"🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+        f"🎓 {s['name']} ({s['grade']})
+━━━━━━━━━━━━━━━━━
+
+"
+        f"Ota-onangizga aytmoqchi bo'lgan gapingizni yozing:
+
+"
+        f"• Sevingan paytlaringiz
+• Xafa bo'lganingiz
+• Ichingizdagi gaplar
+"
+        f"• Ota-onangizga rahmat
+
+"
+        f"🎤 Ovoz yoki ✍️ matn yuboring.
+Bekor: /cancel")
 
 async def student_pick(update, ctx):
     q = update.callback_query; await q.answer()
@@ -453,9 +478,15 @@ async def student_pick(update, ctx):
     if not s: return
     ctx.user_data["student_sid"] = sid
     await q.edit_message_text(
-        f"🎓 {s['name']} ({s['grade']})\n━━━━━━━━━━━━━━━━━\n\n"
-        f"Ota-onangizga gapingizni yozing:\n\n"
-        f"🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+        f"🎓 {s['name']} ({s['grade']})
+━━━━━━━━━━━━━━━━━
+
+"
+        f"Ota-onangizga gapingizni yozing:
+
+"
+        f"🎤 Ovoz yoki ✍️ matn yuboring.
+Bekor: /cancel")
 
 async def _save_student_msg(update, ctx):
     sid = ctx.user_data["student_sid"]
@@ -473,19 +504,24 @@ async def _save_student_msg(update, ctx):
         entry["text"] = update.message.text or ""
     db["_student_to_parent"][sid].append(entry); save_db(db)
     s = ALL.get(sid, {})
-    atxt = f"🎓 O'QUVCHI → OTA-ONA\n{s.get('name','?')} ({s.get('grade','?')})\n{entry['ts']}"
-    if entry["type"] == "text": atxt += f"\n✍️ {entry.get('text','')}"
+    atxt = f"🎓 O'QUVCHI → OTA-ONA
+{s.get('name','?')} ({s.get('grade','?')})
+{entry['ts']}"
+    if entry["type"] == "text": atxt += f"
+✍️ {entry.get('text','')}"
     await notify_admin(ctx, atxt, entry.get("file_id"), entry.get("duration", 0))
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Yana yozish", callback_data=f"stmore_{sid}")],
         [InlineKeyboardButton("✅ Tugatdim", callback_data="st_done")]])
-    await update.message.reply_text("✅ Gapingiz ota-onangizga yetkaziladi!\nYana yozasizmi?", reply_markup=kb)
+    await update.message.reply_text("✅ Gapingiz ota-onangizga yetkaziladi!
+Yana yozasizmi?", reply_markup=kb)
 
 async def student_more(update, ctx):
     q = update.callback_query; await q.answer()
     sid = q.data.replace("stmore_", "")
     ctx.user_data["student_sid"] = sid
-    await q.edit_message_text("🎙 Ovoz yoki ✍️ matn yuboring.\nBekor: /cancel")
+    await q.edit_message_text("🎤 Ovoz yoki ✍️ matn yuboring.
+Bekor: /cancel")
 
 async def student_done(update, ctx):
     q = update.callback_query; await q.answer()
@@ -508,8 +544,12 @@ async def _save_parent_reply(update, ctx):
         entry["type"] = "text"; entry["text"] = update.message.text or ""
     db["_parent_replies"][teacher].append(entry); save_db(db)
     s = ALL.get(sid, {})
-    atxt = f"💬 OTA-ONA → USTOZ\n{s.get('name','?')} → {teacher}\n{entry['from_user_name']}\n{entry['ts']}"
-    if entry["type"] == "text": atxt += f"\n✍️ {entry['text']}"
+    atxt = f"💬 OTA-ONA → USTOZ
+{s.get('name','?')} → {teacher}
+{entry['from_user_name']}
+{entry['ts']}"
+    if entry["type"] == "text": atxt += f"
+✍️ {entry['text']}"
     await notify_admin(ctx, atxt, entry.get("file_id"), entry.get("duration", 0))
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menyu", callback_data=f"pmenu_{sid}")]])
     await update.message.reply_text(f"✅ Javob {teacher} ga yetkazildi!", reply_markup=kb)
@@ -521,9 +561,18 @@ async def cmd_admin(update, ctx):
     if not ADMIN_ID and not db.get("_admin_id"):
         db["_admin_id"] = uid; save_db(db); ADMIN_ID = uid
         await update.message.reply_text(
-            f"✅ ADMIN bo'ldingiz! (ID: {uid})\n"
-            f"Barcha fikrlar real vaqtda sizga keladi.\n\n"
-            f"/admin — panel\n/list — fikrlar\n/inbox — ota-ona javoblari")
+            f"✅ ADMIN bo'ldingiz! (ID: {uid})
+"
+            f"Barcha fikrlar real vaqtda sizga keladi.
+
+"
+            f"/admin — panel
+/list — fikrlar
+/inbox — ota-ona javoblari
+"
+            f"/stats — statistika
+/export — CSV eksport
+/eslatma — eslatma yuborish")
         return
     if uid != get_admin_id():
         await update.message.reply_text("❌ Faqat admin uchun."); return
@@ -541,10 +590,17 @@ async def cmd_admin(update, ctx):
         [InlineKeyboardButton("📚 Ustozlar", callback_data="adm_teachers"),
          InlineKeyboardButton("👥 O'quvchilar", callback_data="adm_students")],
         [InlineKeyboardButton("💬 Ota-ona javob", callback_data="adm_replies"),
-         InlineKeyboardButton("🎓 Bola gaplari", callback_data="adm_children")]])
+         InlineKeyboardButton("🎓 Bola gaplari", callback_data="adm_children")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="adm_stats"),
+         InlineKeyboardButton("📥 CSV Eksport", callback_data="adm_export")],
+        [InlineKeyboardButton("🔔 Eslatma yuborish", callback_data="adm_remind")]])
     await update.message.reply_text(
-        f"🛡 ADMIN PANEL\n━━━━━━━━━━━━━━━━━\n"
-        f"📚 Ustoz: {tc} | 🏫 Xodim: {sc}\n💬 Javob: {rc} | 🎓 Bola: {cc}\n"
+        f"🛡 ADMIN PANEL
+━━━━━━━━━━━━━━━━━
+"
+        f"📚 Ustoz: {tc} | 🏫 Xodim: {sc}
+💬 Javob: {rc} | 🎓 Bola: {cc}
+"
         f"👥 {len(swfb)}/{len(ALL)} o'quvchi | 🧑‍🏫 {len(ts)} ustoz", reply_markup=kb)
 
 async def admin_callback(update, ctx):
@@ -591,11 +647,122 @@ async def admin_callback(update, ctx):
             for i,m in enumerate(msgs,1):
                 if m["type"]=="voice":
                     await q.message.reply_voice(voice=m["file_id"],
-                        caption=f"#{i} ({m.get('duration',0)}s) {m.get('ts','')}")
+                                                caption=f"#{i} ({m.get('duration',0)}s) {m.get('ts','')}")
                 else:
                     await q.message.reply_text(f"#{i} {m.get('ts','')}\n{m.get('text','')}")
+    elif action == "stats":
+        await _send_stats(q.message, db)
+    elif action == "export":
+        await _send_export(q.message, db)
+    elif action == "remind":
+        await _send_remind_menu(q, db)
 
-# ═══════════ /inbox ═══════════
+# ═══════════ 1. /stats — BATAFSIL STATISTIKA ═══════════
+async def _send_stats(msg, db=None):
+    if db is None: db = load_db()
+    total_fb = 0; teacher_fb = 0; staff_fb = 0
+    teacher_counts = {}; grade_counts = {"9-sinf":0,"10-sinf":0,"11-sinf":0}
+    students_with_fb = set(); students_without_fb = []
+    for sid, fbs in db.items():
+        if sid.startswith("_") or not isinstance(fbs, list): continue
+        if sid not in ALL: continue
+        grade = ALL[sid]["grade"]
+        if fbs:
+            students_with_fb.add(sid)
+            grade_counts[grade] = grade_counts.get(grade, 0) + len(fbs)
+            total_fb += len(fbs)
+            for f in fbs:
+                t = f.get("teacher","?")
+                teacher_counts[t] = teacher_counts.get(t, 0) + 1
+                if f.get("role") == "staff": staff_fb += 1
+                else: teacher_fb += 1
+    for sid, info in ALL.items():
+        if sid not in students_with_fb:
+            students_without_fb.append(f"{info['name']} ({info['grade']})")
+    parent_replies = sum(len(v) for v in db.get("_parent_replies",{}).values())
+    child_msgs = sum(len(v) for v in db.get("_student_to_parent",{}).values())
+    top_teachers = sorted(teacher_counts.items(), key=lambda x: -x[1])[:5]
+    lines = [
+        "📊 BATAFSIL STATISTIKA",
+        "━"*17,
+        f"📁 Jami fikrlar: {total_fb}",
+        f"  📚 Ustoz fikri: {teacher_fb}",
+        f"  🏫 Xodim fikri: {staff_fb}",
+        "",
+        "🏫 Sinf bo'yicha:",
+        f"  9-sinf: {grade_counts.get('9-sinf',0)} ta",
+        f"  10-sinf: {grade_counts.get('10-sinf',0)} ta",
+        f"  11-sinf: {grade_counts.get('11-sinf',0)} ta",
+        "",
+        f"👥 O'quvchilar: {len(students_with_fb)}/{len(ALL)} ta fikr olgan",
+        f"💬 Ota-ona javoblari: {parent_replies} ta",
+        f"🎓 Bola gaplari: {child_msgs} ta",
+    ]
+    if top_teachers:
+        lines.append("")
+        lines.append("🏆 TOP-5 ustoz (fikr bo'yicha):")
+        for i,(t,c) in enumerate(top_teachers,1):
+            lines.append(f"  {i}. {t}: {c} ta")
+    coverage = round(len(students_with_fb)/len(ALL)*100) if ALL else 0
+    lines.append("")
+    lines.append(f"📊 Qamrab olish: {coverage}%")
+    if students_without_fb:
+        lines.append("")
+        lines.append(f"⚠️ Fikr yo'q ({len(students_without_fb)} ta):")
+        for s in students_without_fb[:10]:
+            lines.append(f"  • {s}")
+        if len(students_without_fb) > 10:
+            lines.append(f"  ... va yana {len(students_without_fb)-10} ta")
+    await msg.reply_text("\n".join(lines))
+
+async def cmd_stats(update, ctx):
+    if update.effective_user.id != get_admin_id():
+        await update.message.reply_text("❌ Faqat admin uchun.")
+        return
+    await _send_stats(update.message)
+
+# ═══════════ 2. /export — CSV EKSPORT ═══════════
+async def _send_export(msg, db=None):
+    if db is None: db = load_db()
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=';')
+    writer.writerow(["#","O'quvchi","Sinf","Ustoz/Xodim","Lavozim","Rol","Tur","Davomiylik(sek)","Yozma izoh","Sana"])
+    row_num = 1
+    for sid, fbs in db.items():
+        if sid.startswith("_") or not isinstance(fbs, list): continue
+        if sid not in ALL: continue
+        s = ALL[sid]
+        for fb in fbs:
+            writer.writerow([
+                row_num,
+                s["name"],
+                s["grade"],
+                fb.get("teacher","?"),
+                fb.get("detail",""),
+                "Ustoz" if fb.get("role","teacher") == "teacher" else "Xodim",
+                fb.get("type","voice"),
+                fb.get("duration",0),
+                fb.get("extra",""),
+                fb.get("ts","")
+            ])
+            row_num += 1
+    csv_data = output.getvalue().encode("utf-8-sig")
+    bio = io.BytesIO(csv_data)
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    bio.name = f"fikrlar_{ts}.csv"
+    await msg.reply_document(
+        document=bio,
+        filename=bio.name,
+        caption=f"📥 Barcha fikrlar CSV formatda\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n📊 Jami: {row_num-1} ta yozuv")
+
+async def cmd_export(update, ctx):
+    if update.effective_user.id != get_admin_id():
+        await update.message.reply_text("❌ Faqat admin uchun.")
+        return
+    await update.message.reply_text("🔄 CSV fayl tayyorlanmoqda...")
+    await _send_export(update.message)
+
+# ═══════════ 3. USTOZLARGA INBOX ═══════════
 async def cmd_inbox(update, ctx):
     db = load_db(); rbt = db.get("_parent_replies",{})
     args = ctx.args
@@ -620,6 +787,78 @@ async def cmd_inbox(update, ctx):
             await update.message.reply_voice(voice=r["file_id"],caption=f"({r.get('duration',0)}s)")
         else: await update.message.reply_text(r.get("text",""))
 
+# ═══════════ 4. ESLATMA TIZIMI ═══════════
+async def _send_remind_menu(q, db):
+    no_fb = []
+    for sid, info in ALL.items():
+        fbs = db.get(sid, [])
+        if not fbs:
+            no_fb.append((sid, info))
+    if not no_fb:
+        await q.message.reply_text("🎉 Barcha o'quvchilar haqida fikr bor!")
+        return
+    lines = [f"⚠️ Fikr yo'q: {len(no_fb)} ta o'quvchi", ""]
+    grade_groups = {}
+    for sid, info in no_fb:
+        g = info["grade"]
+        grade_groups.setdefault(g, []).append(info["name"])
+    for grade, names in grade_groups.items():
+        lines.append(f"🏫 {grade} ({len(names)} ta):")
+        for n in names: lines.append(f"  • {n}")
+    lines.append("")
+    lines.append(f"🔔 /eslatma buyrug'i bilan barcha ustozlarga eslatma yuboring")
+    await q.message.reply_text("\n".join(lines))
+
+async def cmd_eslatma(update, ctx):
+    if update.effective_user.id != get_admin_id():
+        await update.message.reply_text("❌ Faqat admin uchun.")
+        return
+    db = load_db()
+    no_fb_sids = [sid for sid, info in ALL.items() if not db.get(sid)]
+    if not no_fb_sids:
+        await update.message.reply_text("🎉 Barcha o'quvchilar haqida fikr bor!")
+        return
+    grade_groups = {}
+    for sid in no_fb_sids:
+        info = ALL[sid]; g = info["grade"]
+        grade_groups.setdefault(g, []).append(info["name"])
+    lines = [
+        "🔔 ESLATMA: Quyidagi o'quvchilar haqida hali fikr bildirilmagan:",
+        ""
+    ]
+    for grade, names in grade_groups.items():
+        lines.append(f"🏫 {grade} ({len(names)} ta):")
+        for n in names: lines.append(f"  • {n}")
+    lines.append("")
+    lines.append(f"📅 Sana: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"📊 Jami: {len(no_fb_sids)} ta o'quvchi fikrsiz")
+    msg_text = "\n".join(lines)
+    # Adminni o'zi ham olsin
+    await update.message.reply_text(msg_text)
+    await update.message.reply_text(
+        f"✅ Eslatma yuborildi!\n"
+        f"⚠️ {len(no_fb_sids)} ta o'quvchi haqida fikr yo'q.\n\n"
+        f"Ustozlarga individual eslatma yuborish uchun bot userlarni bazaga qo'shish kerak bo'ladi.")
+
+# Avtomatik kunlik eslatma (ixtiyoriy - job queue orqali)
+async def daily_remind_job(ctx):
+    aid = get_admin_id()
+    if not aid: return
+    db = load_db()
+    no_fb_sids = [sid for sid, info in ALL.items() if not db.get(sid)]
+    if not no_fb_sids: return
+    coverage = round((len(ALL) - len(no_fb_sids)) / len(ALL) * 100)
+    msg = (f"🔔 KUNLIK ESLATMA\n"
+           f"📊 Qamrab olish: {coverage}%\n"
+           f"⚠️ {len(no_fb_sids)} ta o'quvchi haqida fikr yo'q\n"
+           f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+           f"/stats — to'liq statistika\n/eslatma — ro'yxat")
+    try:
+        await ctx.bot.send_message(aid, msg)
+    except Exception as e:
+        logging.error(f"Daily remind: {e}")
+
+# ═══════════ /list ═══════════
 async def cmd_list(update, ctx):
     db = load_db(); lines = []
     for sid,fbs in db.items():
@@ -670,10 +909,17 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^adm_"))
     app.add_handler(CommandHandler("inbox", cmd_inbox))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("export", cmd_export))
+    app.add_handler(CommandHandler("eslatma", cmd_eslatma))
     app.add_handler(CommandHandler("cancel", cancel))
     # Dispatch
     app.add_handler(MessageHandler((filters.VOICE|(filters.TEXT&~filters.COMMAND)), dispatch_message))
-    print("Bot v6 — Admin + Alohida ota-ona/o'quvchi + Navigatsiya")
+    # Kunlik eslatma (har kuni soat 08:00 da)
+    if app.job_queue:
+        from datetime import time as dtime
+        app.job_queue.run_daily(daily_remind_job, time=dtime(hour=8, minute=0))
+    print("Bot v7 — Stats + Export + Inbox + Eslatma tizimi qo'shildi")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
