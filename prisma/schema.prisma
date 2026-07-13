@@ -1,0 +1,58 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tour {
+  id          String    @id @default(cuid())
+  title       String
+  slug        String    @unique
+  location    String
+  description String
+  price       Int
+  days        Int
+  imageUrl    String?
+  featured    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  bookings    Booking[]
+}
+
+model Booking {
+  id          String   @id @default(cuid())
+  tour        Tour     @relation(fields: [tourId], references: [id])
+  tourId      String
+  fullName    String
+  phone       String
+  email       String?
+  people      Int      @default(1)
+  travelDate  DateTime
+  message     String?
+  status      String   @default("pending") // pending | confirmed | cancelled
+  createdAt   DateTime @default(now())
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  title     String
+  slug      String   @unique
+  excerpt   String
+  content   String
+  imageUrl  String?
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AdminUser {
+  id           String @id @default(cuid())
+  username     String @unique
+  passwordHash String
+}
