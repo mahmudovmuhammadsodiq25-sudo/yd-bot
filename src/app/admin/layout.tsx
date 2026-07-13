@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Admin panel — Sayyoh.uz",
+  title: "Admin panel — Anklavtour",
 };
 
 export default async function AdminLayout({

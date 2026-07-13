@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "Aloqa — Sayyoh.uz",
+  title: "Aloqa — Anklavtour",
 };
 
 export default function ContactPage() {
@@ -24,7 +24,7 @@ export default function ContactPage() {
         <div className="rounded-2xl border border-black/10 p-6 dark:border-white/10">
           <p className="text-sm font-semibold text-teal-700 dark:text-teal-400">Email</p>
           <p className="mt-2 text-lg font-medium text-neutral-900 dark:text-white">
-            info@sayyoh.uz
+            info@anklavtour.uz
           </p>
         </div>
         <div className="rounded-2xl border border-black/10 p-6 dark:border-white/10">

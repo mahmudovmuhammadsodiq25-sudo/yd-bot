@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sayyoh.uz — O'zbekiston bo'ylab sayohat turlari",
+  title: "Anklavtour — O'zbekiston bo'ylab sayohat turlari",
   description:
     "Samarqand, Buxoro, Xiva va boshqa manzillar bo'ylab tashkil qilingan sayohat turlari. Onlayn band qiling, sayohat blogimizni o'qing.",
 };

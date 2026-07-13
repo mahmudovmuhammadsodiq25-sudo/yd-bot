@@ -9,7 +9,7 @@ export default async function AdminLoginPage() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-4">
       <h1 className="mb-8 text-2xl font-bold text-teal-700 dark:text-teal-400">
-        Sayyoh.uz admin panel
+        Anklavtour admin panel
       </h1>
       <LoginForm />
     </div>

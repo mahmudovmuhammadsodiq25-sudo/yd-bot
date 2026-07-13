@@ -24,7 +24,7 @@ export default function AdminNav({ username }: { username: string }) {
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
         <div className="flex items-center gap-8">
           <span className="text-lg font-bold text-teal-700 dark:text-teal-400">
-            Sayyoh.uz admin
+            Anklavtour admin
           </span>
           <nav className="flex gap-5 text-sm font-medium">
             {links.map((link) => (

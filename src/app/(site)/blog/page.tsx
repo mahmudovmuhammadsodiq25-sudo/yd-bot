@@ -3,7 +3,7 @@ import Image from "next/image";
 import { prisma } from "@/lib/prisma";
 
 export const metadata = {
-  title: "Blog — Sayyoh.uz",
+  title: "Blog — Anklavtour",
 };
 
 export const dynamic = "force-dynamic";

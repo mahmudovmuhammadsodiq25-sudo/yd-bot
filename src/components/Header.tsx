@@ -13,7 +13,7 @@ export default function Header() {
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
         <Link href="/" className="flex items-center gap-2 text-xl font-bold tracking-tight text-teal-700 dark:text-teal-400">
           <span aria-hidden>🧭</span>
-          Sayyoh.uz
+          Anklavtour
         </Link>
         <nav className="flex items-center gap-6 text-sm font-medium">
           {links.map((link) => (

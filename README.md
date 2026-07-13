@@ -1,4 +1,4 @@
-# Sayyoh.uz — Turizm sayti
+# Anklavtour — Turizm sayti
 
 O'zbekiston bo'ylab sayohat turlarini taqdim etuvchi, onlayn band qilish, sayohat blogi va admin panelga ega to'liq veb-sayt. Next.js (App Router, TypeScript, Tailwind CSS) va Prisma + SQLite asosida qurilgan.
 
