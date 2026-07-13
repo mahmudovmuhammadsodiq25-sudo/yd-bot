@@ -2,7 +2,7 @@ import Link from "next/link";
 
 const links = [
   { href: "/", label: "Bosh sahifa" },
-  { href: "/tours", label: "Turlar" },
+  { href: "/tours", label: "Manzillar" },
   { href: "/blog", label: "Blog" },
   { href: "/contact", label: "Aloqa" },
 ];

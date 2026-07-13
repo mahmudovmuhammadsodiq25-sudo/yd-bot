@@ -14,15 +14,28 @@ model Tour {
   id          String    @id @default(cuid())
   title       String
   slug        String    @unique
+  category    String    @default("tur") // tur | ziyoratgoh | dam_olish | davolanish
+  country     String    @default("O'zbekiston")
   location    String
   description String
   price       Int
   days        Int
   imageUrl    String?
+  latitude    Float?
+  longitude   Float?
   featured    Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  images      TourImage[]
   bookings    Booking[]
+}
+
+model TourImage {
+  id     String @id @default(cuid())
+  tour   Tour   @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  tourId String
+  url    String
+  order  Int    @default(0)
 }
 
 model Booking {

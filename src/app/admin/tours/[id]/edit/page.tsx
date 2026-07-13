@@ -12,7 +12,10 @@ export default async function EditTourPage({
   if (!username) redirect("/admin/login");
 
   const { id } = await params;
-  const tour = await prisma.tour.findUnique({ where: { id } });
+  const tour = await prisma.tour.findUnique({
+    where: { id },
+    include: { images: { orderBy: { order: "asc" } } },
+  });
   if (!tour) notFound();
 
   return (
