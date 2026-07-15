@@ -72,10 +72,19 @@ export default async function TourDetailPage({
 
         <div>
           <div className="sticky top-24 rounded-2xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-neutral-900">
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">1 kishi uchun narx</p>
-            <p className="text-3xl font-extrabold text-neutral-900 dark:text-white">
-              ${tour.price}
-            </p>
+            {tour.price > 0 ? (
+              <>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">1 kishi uchun narx</p>
+                <p className="text-3xl font-extrabold text-neutral-900 dark:text-white">
+                  ${tour.price}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400">Tashrif</p>
+                <p className="text-3xl font-extrabold text-teal-700 dark:text-teal-400">Bepul</p>
+              </>
+            )}
             <div className="my-6 h-px bg-black/10 dark:bg-white/10" />
             <h2 className="mb-4 font-semibold text-neutral-900 dark:text-white">
               Onlayn band qilish

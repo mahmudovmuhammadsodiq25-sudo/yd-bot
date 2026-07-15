@@ -86,7 +86,7 @@ export default async function HomePage() {
                   {tour.title}
                 </h3>
                 <p className="mt-3 font-semibold text-neutral-700 dark:text-neutral-300">
-                  ${tour.price} dan boshlab
+                  {tour.price > 0 ? `$${tour.price} dan boshlab` : "Tashrif bepul"}
                 </p>
               </div>
             </Link>
